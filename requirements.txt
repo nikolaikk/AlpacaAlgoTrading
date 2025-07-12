@@ -1,0 +1,12 @@
+websockets==10.0
+alpaca_trade_api==3.2.0
+pandas==2.3.0
+pandas_market_calendars==5.1.0
+python-dotenv==1.1.0
+pytz==2024.2
+Requests==2.32.4
+requests_html==0.10.0
+ta==0.11.0
+tqdm==4.66.5
+yfinance==0.2.58
+lxml_html_clean==0.4.2
