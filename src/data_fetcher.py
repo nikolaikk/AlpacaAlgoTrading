@@ -90,7 +90,7 @@ class TradingOpportunities:
 
         for symbol in tqdm(self.all_tickers, desc="Calculating Indicators"):
             try:
-                hist = data[symbol] if len(self.all_tickers) > 1 else data
+                hist = data[symbol].copy() if len(self.all_tickers) > 1 else data
                 if hist.empty or 'Close' not in hist.columns:
                     # print(f"Warning: No data or 'Close' column for {symbol}. Skipping.")
                     continue
