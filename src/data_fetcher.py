@@ -4,12 +4,10 @@ from tqdm import tqdm
 from ta.trend import sma_indicator
 from ta.momentum import RSIIndicator
 from ta.volatility import BollingerBands
-from requests_html import HTMLSession
-from src.config import TradingConfig
 
 class TradingOpportunities:
     """
-    Scrapes Yahoo Finance to find potential trading opportunities among stocks and crypto.
+    Uses the yfinance Screener to find potential trading opportunities among stocks and crypto.
     Also fetches technical analysis indicators for a list of assets.
     """
     def __init__(self, n_stocks=25, n_crypto=25):
@@ -19,57 +17,63 @@ class TradingOpportunities:
         self.opportunities_df = pd.DataFrame()
 
     @staticmethod
-    def _raw_get_daily_info(site):
-        """Helper method to scrape a table from a given URL."""
-        session = HTMLSession()
-        try:
-            response = session.get(site)
-            response.raise_for_status()  # Raise an exception for bad status codes
-            tables = pd.read_html(response.html.raw_html)
-            df = tables[0].copy()
-            df.columns = tables[0].columns
-            df = df.drop(columns=df.columns[df.isna().all()])
-            df = df.loc[~df.isna().all(axis=1)]
-            return df
-        finally:
-            session.close()
+    def _screener_to_df(predefined_id, size, asset_type, alpaca_symbol_fn):
+        """Fetches a Yahoo Finance predefined screener and returns a minimal DataFrame."""
+        screener = yf.Screener()
+        screener.set_predefined_body(predefined_id)
+        screener.size = size
+        quotes = screener.response.get("quotes", [])
+        if not quotes:
+            return pd.DataFrame()
+        df = pd.DataFrame(quotes)
+        # yfinance returns lowercase 'symbol'
+        if "symbol" in df.columns:
+            df = df.rename(columns={"symbol": "Symbol"})
+        df = df[["Symbol"]].head(size).copy()
+        df["asset_type"] = asset_type
+        df["alpaca_symbol"] = df["Symbol"].apply(alpaca_symbol_fn)
+        return df
 
     def find_opportunities(self):
         """
         Fetches top crypto and losing stocks from Yahoo Finance to identify opportunities.
+        Uses yfinance Screener (no browser/Chromium required).
         """
         print("Finding trading opportunities...")
-        # --- Crypto ---
-        df_crypto_list = []
-        # Yahoo finance shows 100 per page, so we only need one loop for n_crypto <= 100
+        dfs = []
+
+        # --- Crypto (top by market cap) ---
         try:
-            df_crypto_page = self._raw_get_daily_info(
-                "https://finance.yahoo.com/crypto/?count=100&offset=0"
+            df_crypto = self._screener_to_df(
+                predefined_id="all_cryptocurrencies_us",
+                size=self.n_crypto,
+                asset_type="crypto",
+                # BTC-USD -> BTC/USD  (replace hyphen, no extra suffix needed)
+                alpaca_symbol_fn=lambda s: s.replace("-", "/"),
             )
-            df_crypto_page["asset_type"] = "crypto"
-            # Map symbol for Alpaca API (e.g., BTC-USD -> BTC/USD)
-            df_crypto_page["alpaca_symbol"] = df_crypto_page["Symbol"].str.replace("-", "/") + "USD"
-            df_crypto_list.append(df_crypto_page)
+            if not df_crypto.empty:
+                dfs.append(df_crypto)
         except Exception as e:
             print(f"Could not fetch crypto data: {e}")
 
-        df_crypto = pd.concat(df_crypto_list, axis=0).reset_index(drop=True).head(self.n_crypto)
-
         # --- Stocks (Top Losers) ---
-        df_stock_list = []
         try:
-            df_stock_page = self._raw_get_daily_info(
-                "https://finance.yahoo.com/losers?offset=0&count=100"
+            df_stock = self._screener_to_df(
+                predefined_id="day_losers",
+                size=self.n_stocks,
+                asset_type="stock",
+                alpaca_symbol_fn=lambda s: s,
             )
-            df_stock_page["asset_type"] = "stock"
-            df_stock_page["alpaca_symbol"] = df_stock_page["Symbol"]
-            df_stock_list.append(df_stock_page)
+            if not df_stock.empty:
+                dfs.append(df_stock)
         except Exception as e:
             print(f"Could not fetch stock data: {e}")
 
-        df_stock = pd.concat(df_stock_list, axis=0).reset_index(drop=True).head(self.n_stocks)
+        if not dfs:
+            print("No opportunities found.")
+            return self.opportunities_df
 
-        self.opportunities_df = pd.concat([df_crypto, df_stock], axis=0).reset_index(drop=True)
+        self.opportunities_df = pd.concat(dfs, axis=0).reset_index(drop=True)
         self.all_tickers = self.opportunities_df["Symbol"].tolist()
         print(f"Found {len(self.opportunities_df)} potential opportunities.")
         return self.opportunities_df
@@ -86,7 +90,7 @@ class TradingOpportunities:
         df_tech_list = []
         
         # Use yfinance's download for efficiency
-        data = yf.download(self.all_tickers, period="1y", interval="1d", group_by='ticker', auto_adjust=True, threads=True)
+        data = yf.download(self.all_tickers, period="1y", interval="1d", group_by='ticker', auto_adjust=True)
 
         for symbol in tqdm(self.all_tickers, desc="Calculating Indicators"):
             try:
